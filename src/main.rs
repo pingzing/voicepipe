@@ -1,36 +1,136 @@
+#[macro_use]
+extern crate bitflags;
+
 extern crate user32;
 extern crate winapi;
 extern crate gdi32;
 
 use std::ffi::CString;
 use std::fmt;
-use std::io;
-use std::io::Write;
 
-struct PixelMessage {
-    original_value: u32,
-    sequence_number: u8,
-    checksum: u8,
-    key_code: u8,
-    is_virtual_key_code: bool,
-    is_ctrl_down: bool,
-    is_alt_down: bool,
-    is_shift_down: bool,
-    is_win_down: bool,
+trait Message {
+    fn get_message_type(&self) -> MessageType;
+    fn get_value(&self) -> u8;
+    fn get_pixel_value(&self) -> u32;
 }
 
-impl PixelMessage {
+enum MessageType {
+    DataText,
+    MetadataDataLength,
+    MetadataEndOfMessage,
+}
+
+bitflags! {
+    pub flags MessageFlags: u32 {
+        const IS_METADATA_FLAG  = 0b10000000_00000000_00000000,
+        const MSG_TYPE_1        = 0b01000000_00000000_00000000,
+        const MSG_TYPE_2        = 0b00100000_00000000_00000000,
+        const MSG_TYPE_3        = 0b00010000_00000000_00000000,
+        const MSG_TYPE_4        = 0b00001000_00000000_00000000,
+        const SEQ_NUM_1         = 0b00000100_00000000_00000000,
+        const SEQ_NUM_2         = 0b00000010_00000000_00000000,
+        const SEQ_NUM_3         = 0b00000001_00000000_00000000,
+        const SEQ_NUM_4         = 0b00000000_10000000_00000000,
+        const CHKSUM_1          = 0b00000000_01000000_00000000,
+        const CHKSUM_2          = 0b00000000_00100000_00000000,
+        const CHKSUM_3          = 0b00000000_00010000_00000000,        
+        const CHKSUM_4          = 0b00000000_00001000_00000000,
+        const CHKSUM_5          = 0b00000000_00000100_00000000,
+        const CHKSUM_6          = 0b00000000_00000010_00000000,
+        const CHKSUM_7          = 0b00000000_00000001_00000000,
+        const DATA_1            = 0b00000000_00000000_10000000,
+        const DATA_2            = 0b00000000_00000000_01000000,
+        const DATA_3            = 0b00000000_00000000_00100000,
+        const DATA_4            = 0b00000000_00000000_00010000,
+        const DATA_5            = 0b00000000_00000000_00001000,
+        const DATA_6            = 0b00000000_00000000_00000100,
+        const DATA_7            = 0b00000000_00000000_00000010,
+        const DATA_8            = 0b00000000_00000000_00000001,
+
+        const IS_METADATA = IS_METADATA_FLAG.bits,
+        const MESSAGE_TYPE = MSG_TYPE_1.bits | MSG_TYPE_2.bits 
+                           | MSG_TYPE_3.bits | MSG_TYPE_4.bits,
+        const SEQUENCE_NUMBER = SEQ_NUM_1.bits | SEQ_NUM_2.bits 
+                              | SEQ_NUM_3.bits | SEQ_NUM_4.bits,
+        const CHECKSUM = CHKSUM_1.bits | CHKSUM_2.bits | CHKSUM_3.bits 
+                       | CHKSUM_4.bits | CHKSUM_5.bits | CHKSUM_6.bits 
+                       | CHKSUM_7.bits,
+        const DATA = DATA_1.bits | DATA_2.bits | DATA_3.bits 
+                   | DATA_4.bits | DATA_5.bits | DATA_6.bits 
+                   | DATA_7.bits | DATA_8.bits
+    }
+}
+
+impl fmt::Display for MessageFlags {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f,
+               "Is Metadata: {}, Message Type: {}, Sequence Number: {},
+               Checksum: {}, Data: {}",
+               self.get_is_metadata_byte(),
+               self.get_message_type_byte(),
+               self.get_sequence_number_byte(),
+               self.get_checksum_byte(),
+               self.get_data())
+    }
+}
+
+impl MessageFlags {
+    fn get_is_metadata_byte(&self) -> u8 {
+        ((self.bits & IS_METADATA.bits) >> 23) as u8
+    }
+
+    fn get_is_metadata(&self) -> bool {
+        self.get_is_metadata_byte() == 1
+    }
+
+    fn get_message_type_byte(&self) -> u8 {
+        ((self.bits & MESSAGE_TYPE.bits) >> 19) as u8
+    }
+
+    fn get_message_type(&self) -> MessageType {
+        let msg_type = self.get_message_type_byte();
+        match self.get_is_metadata() {
+            true => {
+                match msg_type {
+                    0x0 => MessageType::MetadataDataLength,  
+                    0xF => MessageType::MetadataEndOfMessage,                  
+                    _ => {
+                        panic!("Invalid Metadata Message Type: {}. Bad programmer!",
+                               msg_type)
+                    }
+                }
+            }
+            false => {
+                match msg_type {
+                    0x0 => MessageType::DataText,
+                    _ => panic!("Invalid data Message Type: {}. Bad programmer!", msg_type),
+                }
+            }
+        }
+    }
+
+    fn get_sequence_number_byte(&self) -> u8 {
+        ((self.bits & SEQUENCE_NUMBER.bits) >> 15) as u8
+    }
+
+    fn get_checksum_byte(&self) -> u8 {
+        ((self.bits & CHECKSUM.bits) >> 8) as u8
+    }
+
+    fn get_data(&self) -> u8 {
+        (self.bits & DATA.bits) as u8
+    }
+
+    fn get_key_code(&self) -> char {
+        self.get_data() as char
+    }
+
     fn is_checksum_valid(&self) -> bool {
-        //casting all to u32 here to avoid u8 wrapping behavior.
+        // casting all to u32 here to avoid u8 wrapping behavior.
         let calculated_checksum =
-            (self.sequence_number as u32
-            + self.key_code as u32
-            + self.is_ctrl_down as u32
-            + self.is_alt_down as u32
-            + self.is_shift_down as u32 
-            + self.is_win_down as u32) 
-            / 6;                         
-        if calculated_checksum as u8 == self.checksum {            
+            (self.get_is_metadata_byte() as u32 + self.get_message_type_byte() as u32 +
+             self.get_sequence_number_byte() as u32 + self.get_data() as u32) / 4;
+        if calculated_checksum as u8 == self.get_checksum_byte() {
             return true;
         } else {
             return false;
@@ -38,9 +138,22 @@ impl PixelMessage {
     }
 }
 
-fn main() {
-    let window_name = CString::new("main.rs").unwrap();
+impl Message for MessageFlags {
+    fn get_message_type(&self) -> MessageType {
+        MessageFlags::get_message_type(self)
+    }
 
+    fn get_value(&self) -> u8 {
+        MessageFlags::get_data(self)
+    }
+
+    fn get_pixel_value(&self) -> u32 {
+        self.bits
+    }
+}
+
+fn main() {
+    let window_name = CString::new("rawr - deleteme").unwrap();
     let window_handle;
     let context_handle;
     unsafe {
@@ -48,64 +161,55 @@ fn main() {
         context_handle = user32::GetDC(window_handle);
     }
 
-    let mut previous_value: Option<u32> = None;
+    let mut previous_value = None;
+    // various metadata flags
+    let mut character_buffer: Vec<char> = vec![];
 
     loop {
-        let pixel_color: u32;
-        unsafe {
-            pixel_color = gdi32::GetPixel(context_handle, 200, 200);
+        match read_one_message(previous_value.unwrap_or(0xFFFFFFF), context_handle) {
+            Some(new_val) => {
+                previous_value = Some(new_val.get_pixel_value());
+                match new_val.get_message_type() {
+                    MessageType::MetadataDataLength => {
+                        let cap = new_val.get_value();
+                        character_buffer = Vec::with_capacity(cap as usize);
+                    }
+                    MessageType::MetadataEndOfMessage => {
+                        let message: String = character_buffer.iter().cloned().collect();
+                        println!("{}", message);
+                    }
+                    MessageType::DataText => {
+                        if character_buffer.capacity() <= character_buffer.len() {
+                            continue;
+                        }
+                        character_buffer.push(new_val.get_value() as char);
+                        if character_buffer.len() == character_buffer.capacity() {
+                            let message: String = character_buffer.iter().cloned().collect();
+                            println!("{}", message);
+                        }
+                    }
+                }
+            }
+            None => {}
         }
-
-        if previous_value.is_some() && pixel_color == previous_value.unwrap() {
-            continue;
-        }        
-
-        //println!("Binary: {:b}", pixel_color);
-
-        let message = PixelMessage {
-            original_value: pixel_color,
-            //per WinAPI's definition, COLORREF, which we get back from GetPixel, is a 3 byte value and the first byte is always zeroed.
-            sequence_number:        ((pixel_color & 0b11110000_00000000_00000000u32) >> 20) as u8, // top 4 bits of a 24-bit value            
-            checksum:               ((pixel_color & 0b00001111_11100000_00000000u32) >> 13) as u8, /* next 7 bits */
-            key_code:               ((pixel_color & 0b00000000_00011111_11100000u32) >> 5) as u8, /* next 8 bits */
-            is_virtual_key_code:    ((pixel_color & 0b00000000_00000000_00010000u32) >> 4) == 1, // next 1 bit
-            is_ctrl_down:           ((pixel_color & 0b00000000_00000000_00001000u32) >> 3) == 1, /* next 1 bit */
-            is_alt_down:            ((pixel_color & 0b00000000_00000000_00000100u32) >> 2) == 1, /* next 1 bit */
-            is_shift_down:          ((pixel_color & 0b00000000_00000000_00000010u32) >> 1) == 1, // next 1 bit
-            is_win_down:            ((pixel_color & 0b00000000_00000000_00000001u32)) == 1, /* next 1 bit */
-        };          
-        
-        // compare checksum
-        if message.is_checksum_valid() {
-            print!("{}", message.key_code as char);
-            io::stdout().flush().ok().expect("Could not flush stdout");         
-        }
-
-        previous_value = Some(pixel_color);
     }
 }
 
-impl fmt::Display for PixelMessage {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f,
-               "sequence_number: {}, checksum: {}, keycode: {}, 
-               is_virtual_key_code: {}, is_ctrl_down:{},
-               is_alt_down: {}, is_shift_down: {}, is_win_down: {}",
-               self.sequence_number,
-               self.checksum,
-               self.key_code,
-               self.is_virtual_key_code,
-               self.is_ctrl_down,
-               self.is_alt_down,
-               self.is_shift_down,
-               self.is_win_down)
-    }
-}
 
-impl fmt::Debug for PixelMessage {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, 
-        "Binary: {:b},
-        {}", self.original_value, self)
+fn read_one_message(previous_value: u32, context_handle: winapi::HDC) -> Option<Box<Message>> {
+    let pixel_color: u32;
+    unsafe {
+        pixel_color = gdi32::GetPixel(context_handle, 200, 200);
+    }
+
+    let message = MessageFlags::from_bits_truncate(pixel_color);
+
+    if pixel_color == previous_value {
+        return None;
+    }
+
+    match message.is_checksum_valid() {
+        true => Some(Box::new(message)),
+        false => None,
     }
 }

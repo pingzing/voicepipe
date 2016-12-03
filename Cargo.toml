@@ -7,3 +7,4 @@ authors = ["pingzing"]
 winapi = "0.2"
 user32-sys = "0.2"
 gdi32-sys = "0.2"
+bitflags = "0.7"

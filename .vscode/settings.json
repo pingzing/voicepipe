@@ -1,3 +1,9 @@
 // Place your settings in this file to overwrite default and user settings.
-{
+{    
+    "rust.rustLangSrcPath": "C:\\Users\\mcali\\.multirust\\toolchains\\stable-x86_64-pc-windows-gnu\\lib\\rustlib\\src\\rust\\src", // Specifies path to /src directory of local copy of Rust sources                    
+    "rust.formatOnSave": true, // Turn on/off autoformatting file on save (EXPERIMENTAL)
+    "rust.checkOnSave": true, // Turn on/off `cargo check` project on save (EXPERIMENTAL)
+    "rust.checkWith": "build", // Specifies the linter to use. (EXPERIMENTAL)
+    "rust.useJsonErrors": false, // Enable the use of JSON errors (requires Rust 1.7+). Note: This is an unstable feature of Rust and is still in the process of being stablised
+    "rust.useNewErrorFormat": true // "Use the new Rust error format (RUST_NEW_ERROR_FORMAT=true). Note: This flag is mutually exclusive with `useJsonErrors`.
 }
